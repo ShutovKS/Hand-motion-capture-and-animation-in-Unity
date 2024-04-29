@@ -1,29 +1,59 @@
-from cvzone.HandTrackingModule import HandDetector
+# main.py
+import threading
+import time
+import configparser
+
 import cv2
-import socket
 
-cap = cv2.VideoCapture(0)
-cap.set(3, 1280)
-cap.set(4, 720)
-success, img = cap.read()
-h, w, _ = img.shape
-detector = HandDetector(detectionCon=0.8, maxHands=2)
+from socket_server import MotionCaptureServer
+from motion_capture import MotionCapture
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-serverAddressPort = ("127.0.0.1", 5052)
 
-while True:
-    success, img = cap.read()
-    hands, img = detector.findHands(img)
-    data = []
+def main():
+    config = configparser.ConfigParser()
+    config.read('config.ini')
+    host = config.get('Server', 'host')
+    port = config.getint('Server', 'port')
 
-    if hands:
-        hand = hands[0]
-        lmList = hand["lmList"]
-        for lm in lmList:
-            data.extend([lm[0], h - lm[1], lm[2]])
+    server = MotionCaptureServer(host=host, port=port)
 
-        sock.sendto(str.encode(str(data)), serverAddressPort)
+    def on_connection_lost():
+        print("Событие потери соединения обработано.")
+        while True:
+            try:
+                server.start_server()
+                break
+            except Exception as e:
+                print(f"Попытка повторного подключения: {e}")
+                time.sleep(1)
 
-    cv2.imshow("Image", img)
-    cv2.waitKey(1)
+    server.connection_lost.register(on_connection_lost)
+
+    server_thread = threading.Thread(target=server.start_server)
+    server_thread.start()
+
+    motion_capture = MotionCapture()
+
+    try:
+        # # для захвата из локального видео
+        # while True:  # Зацикливание воспроизведения
+        #     pose_data_generator = motion_capture.video_file_capture('Hot Anime dance.mp4')
+        #     for pose_data in pose_data_generator:
+        #         server.send_data(pose_data)
+
+        # для захвата из веб-камеры
+        while True:
+            pose_data = motion_capture.webcam_capture()
+            if pose_data is not None:
+                server.send_data(pose_data)
+    except KeyboardInterrupt:
+        print("Программа остановлена пользователем.")
+    finally:
+        server.stop_server()
+        server_thread.join()
+        motion_capture.cam.release()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
